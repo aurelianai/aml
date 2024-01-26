@@ -1,89 +1,71 @@
-#[cfg(test)]
-use crate::*;
-#[cfg(test)]
-use half::f16;
+use crate::{sgemm, F32Tensor};
+use float_cmp::approx_eq;
 
 #[test]
-pub fn dot_correctness_sm() {
-    let zeros: Vec<i8> = vec![0x0F];
-    let nibbles: Vec<i8> = vec![0xAAu8 as i8, 0x36];
-    let scales: Vec<f16> = vec![3f32, 5f32].iter().map(|v| f16::from_f32(*v)).collect();
-    let a = I4Tensor::new(&scales, &zeros, &nibbles, vec![4]);
+fn sgemm_trivial_case() {
+    let a_data = vec![
+        -113.0, -97.0, -70.0, 19.0, -73.0, -1.0, 115.0, 37.0, -26.0, 53.0,
+    ];
+    let a = F32Tensor::new(&a_data, vec![2, 5]);
+    let b_data = vec![
+        -82.0, 23.0, 82.0, -73.0, -68.0, 122.0, 12.0, -44.0, 30.0, 4.0, -35.0, -116.0, -32.0,
+        -101.0, 121.0,
+    ];
+    let b = F32Tensor::new(&b_data, vec![5, 3]);
 
-    let values: Vec<f16> = vec![0f32, 4f32, 5f32, 8f32]
-        .iter()
-        .map(|v| f16::from_f32(*v))
-        .collect();
-    let b = F16Tensor::new(values, vec![4]);
+    let mut c = vec![0.0; 6];
 
-    // Values: [-6,-6, 3, 6]
-    // Scales: [3, 5]
-    // Zeros: [0, -1]
-    // Scaled, Shifted Values: [-18, -18, 20, 35]
-    // b: [0, 4, 5, 8]
-    // Dot with b: 0 -72 + 100 + 280 = 308
+    sgemm(&a, false, &b, false, &mut c);
 
-    let dot = qdot(&b, &a);
+    let c_expected = [17919.0, 13785.0, -34237.0, -9669.0, -13914.0, 24487.0];
 
-    assert!(dot as i32 == 308);
-}
-
-#[test]
-pub fn qgemv_correctness_sm() {
-    let a = F16Tensor::new(
-        vec![0f32, 4f32, 5f32, 8f32]
-            .iter()
-            .map(|v| f16::from_f32(*v))
-            .collect(),
-        vec![4],
-    );
-
-    let scales: Vec<f16> = vec![3f32, 5f32, 3f32, 5f32, 3f32, 5f32]
-        .iter()
-        .map(|v| f16::from_f32(*v))
-        .collect();
-    let zeros: Vec<i8> = vec![0x0F, 0x0F, 0x0F];
-    let nibbles: Vec<i8> = vec![0xAAu8 as i8, 0x36, 0xAAu8 as i8, 0x36, 0xAAu8 as i8, 0x36];
-    let b = I4Tensor::new(&scales, &zeros, &nibbles, vec![3, 4]);
-
-    let actual = qgemv(&a, &b);
-
-    let expected: Vec<i32> = vec![308, 308, 308];
-    for i in 0..expected.len() {
-        assert!(actual.values[i].to_f32() as i32 == 308)
+    for i in 0..6 {
+        assert!(approx_eq!(f32, c[i], c_expected[i]));
     }
 }
 
+/* This should go into benchmarks. Takes forever
+fn locate_test_file(file: &str) -> String {
+    let mut test_file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file_path.push("resources");
+    test_file_path.push(file);
+
+    String::from(
+        test_file_path
+            .to_str()
+            .expect("path could not be converted to string"),
+    )
+}
+
 #[test]
-pub fn qgemm_correctness_sm() {
-    let values: Vec<f16> = vec![0f32, 4f32, 5f32, 8f32, 0f32, 4f32, 6f32, 3f32]
-        .iter()
-        .map(|v| f16::from_f32(*v))
-        .collect();
-    let a = F16Tensor::new(values, vec![2, 4]);
-    // [
-    //    [0, 4, 5, 8],
-    //    [0, 4, 5, 8],
-    // ]
+pub fn sgemm_correctness() {
+    let mut arr1_fp = File::open(locate_test_file("f32-arr1.bin")).expect("1 not found");
+    let mut arr2_fp = File::open(locate_test_file("f32-arr2.bin")).expect("2 not found");
+    let mut arr3_fp = File::open(locate_test_file("f32-arr3.bin")).expect("3 not found");
 
-    let scales: Vec<f16> = vec![3f32, 5f32, 3f32, 5f32]
-        .iter()
-        .map(|v| f16::from_f32(*v))
-        .collect();
-    let zeros: Vec<i8> = vec![0x0F, 0x0F];
-    let nibbles: Vec<i8> = vec![0xAAu8 as i8, 0x36, 0xAAu8 as i8, 0x36];
-    let b = I4Tensor::new(&scales, &zeros, &nibbles, vec![2, 4]);
-    // [
-    //    [-18, -18, 20, 30],
-    //    [-18, -18, 20, 30],
-    // [
+    let mut arr1 = vec![0.0; 4096 * 1024];
+    arr1_fp
+        .read_f32_into::<BigEndian>(&mut arr1)
+        .expect("Error Reading F32s from `f32-arr1.bin`");
 
-    let mut c = F16Tensor::zeros(vec![2, 2]);
+    let mut arr2 = vec![0.0; 4096 * 512];
+    arr2_fp
+        .read_f32_into::<BigEndian>(&mut arr2)
+        .expect("Error Reading F32s from `f32-arr2.bin`");
 
-    qgemm(&a, false, &b, true, &mut c);
+    let mut arr3_expected = vec![0.0; 512 * 1024];
+    arr3_fp
+        .read_f32_into::<BigEndian>(&mut arr3_expected)
+        .expect("Error Reading F32s from `f32-arr3.bin`");
 
-    let expected = vec![308, 308, 308, 308];
-    for i in 0..expected.len() {
-        assert!(c.values[i].to_f32() as i32 == 308);
+    let a = F32Tensor::new(&mut arr1, vec![1024, 4096]);
+    let b = F32Tensor::new(&mut arr2, vec![4096, 512]);
+    let mut c = vec![0.0; 512 * 1024];
+
+    sgemm(&a, false, &b, false, &mut c);
+
+    for i in 0..(1024 * 512) {
+        assert!(approx_eq!(f32, c[i], arr3_expected[i]));
     }
 }
+*/

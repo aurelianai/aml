@@ -12,7 +12,7 @@ pub struct I4Tensor<'a> {
     pub zeros: &'a [i8],
     /// data, called nibbles becuase the values are packed in pairs as a u8
     pub nibbles: &'a [i8],
-    // number of i4 values per scale value
+    /// number of i4 values per scale/zero value value
     pub block_size: usize,
     pub shape: Vec<usize>,
 }
@@ -67,6 +67,13 @@ impl F16Tensor {
         F16Tensor { values, shape }
     }
 
+    pub fn zeros(shape: Vec<usize>) -> F16Tensor {
+        let n_elements = shape.iter().fold(1 as usize, |a, v| a * v);
+        let values: Vec<f16> = vec![f16::from_f32(0f32); n_elements];
+
+        F16Tensor { values, shape }
+    }
+
     pub fn reshape(self: &mut Self, new_shape: Vec<usize>) {
         assert!(self.values.len() == new_shape.iter().fold(1 as usize, |a, v| a * v));
         self.shape = new_shape;
@@ -74,7 +81,7 @@ impl F16Tensor {
 }
 
 /// Dot product between an F16 Tensor and a I4 tensor
-/// 
+///
 /// Expects `a` (n, ) and `b` (n, )
 pub fn qdot(a: &F16Tensor, b: &I4Tensor) -> f32 {
     assert!(a.shape.len() == 1);
@@ -118,11 +125,14 @@ pub fn qdot(a: &F16Tensor, b: &I4Tensor) -> f32 {
 
 /// Dot product between `a` (F16) and each row of `b` (I4)
 ///
-/// F16 (n,) @ I4 (m, n) --> F16 (m,)
+/// I4 (m, n) @ F16 (n,) --> F16 (m,)
 pub fn qgemv(a: &F16Tensor, b: &I4Tensor) -> F16Tensor {
     assert!(a.shape.len() == 1);
     assert!(b.shape.len() == 2);
-    assert!(a.shape[0] == b.shape[1], "a is not the same length as b rows");
+    assert!(
+        a.shape[0] == b.shape[1],
+        "a is not the same length as b rows"
+    );
 
     let mut out = Vec::with_capacity(b.shape[0]);
 
@@ -133,4 +143,78 @@ pub fn qgemv(a: &F16Tensor, b: &I4Tensor) -> F16Tensor {
     }
 
     F16Tensor::new(out, vec![b.shape[0]])
+}
+
+/// Matrix Muliply between an `F16Tensor` and an `I4Tensor`. Result stored in `c` (F16)
+///
+/// I4(m, n) @ F16(k, n)**T --> F16(m, k)
+pub fn qgemm(a: &F16Tensor, a_transpose: bool, b: &I4Tensor, b_transpose: bool, c: &mut F16Tensor) {
+    assert!(
+        a.shape.len() == 2,
+        "`a` must have 2 dimensions. Found {}.",
+        a.shape.len()
+    );
+    assert!(
+        b.shape.len() == 2,
+        "`b` must have 2 dimensions. Found {}.",
+        b.shape.len()
+    );
+
+    let out_shape = vec![
+        match a_transpose {
+            true => a.shape[1],
+            false => a.shape[0],
+        },
+        match b_transpose {
+            true => b.shape[0],
+            false => b.shape[1],
+        },
+    ];
+
+    if a_transpose && b_transpose {
+        assert!(
+            a.shape[0] == b.shape[1],
+            "Inner dimensions {}, {} do not match",
+            a.shape[0],
+            b.shape[1]
+        );
+    } else if a_transpose {
+        assert!(
+            a.shape[0] == b.shape[0],
+            "Inner dimensions {}, {} do not match",
+            a.shape[0],
+            b.shape[0]
+        );
+    } else if b_transpose {
+        assert!(
+            a.shape[1] == b.shape[1],
+            "Inner dimensions {}, {} do not match",
+            a.shape[1],
+            b.shape[1]
+        );
+    } else {
+        assert!(
+            a.shape[1] == b.shape[0],
+            "Inner dimensions {}, {} do not match",
+            a.shape[1],
+            b.shape[0]
+        );
+    }
+
+    assert!(
+        out_shape == c.shape,
+        "`c` has the wrong shape. Expected {:?}, found {:?}.",
+        out_shape,
+        c.shape
+    );
+
+    if a_transpose && b_transpose {
+        todo!();
+    } else if a_transpose {
+        todo!();
+    } else if b_transpose {
+        todo!();
+    } else {
+        todo!();
+    }
 }

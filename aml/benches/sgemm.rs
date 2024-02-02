@@ -1,4 +1,4 @@
-use aml::{sgemm, sgemm_tiled, sgemm_tiled_par, F32Tensor};
+use aml::{sgemm, sgemm_tiled, sgemm_tiled_par, sgemm_tiled_simd, F32Tensor};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::{thread_rng, Rng};
 
@@ -83,12 +83,34 @@ pub fn sgemm_benches(cri: &mut Criterion) {
 
     cri.bench_function("Medium Rectangular Matrices (Simd)", |bencher| {
         bencher.iter(|| {
-            sgemm_tiled_par(
+            sgemm_tiled_simd(
                 black_box(&a_simd),
                 black_box(false),
                 black_box(&b_simd),
                 black_box(false),
                 black_box(&mut c_simd),
+            )
+        })
+    });
+
+    let mut a_data_simd_lg: Vec<f32> = vec![0.0; 4096 * 1024];
+    a_data_simd_lg.iter_mut().for_each(|v| *v = rng.gen());
+    let a_simd_lg = F32Tensor::new(&a_data_simd_lg, vec![4096, 1024]);
+
+    let mut b_data_simd_lg: Vec<f32> = vec![0.0; 1024 * 512];
+    b_data_simd_lg.iter_mut().for_each(|v| *v = rng.gen());
+    let b_simd_lg = F32Tensor::new(&b_data_simd_lg, vec![1024, 512]);
+
+    let mut c_simd_lg: Vec<f32> = vec![0.0; 4096 * 512];
+
+    cri.bench_function("Large Rectangular Matrices (Simd)", |bencher| {
+        bencher.iter(|| {
+            sgemm_tiled_simd(
+                black_box(&a_simd_lg),
+                black_box(false),
+                black_box(&b_simd_lg),
+                black_box(false),
+                black_box(&mut c_simd_lg),
             )
         })
     });

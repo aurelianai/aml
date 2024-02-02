@@ -194,7 +194,6 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
     let block_size = 16;
 
     if is_x86_feature_detected!("avx") {
-        println!("Using avx instructions.");
         for col_block in (0..p).step_by(block_size) {
             for row in 0..m {
                 for tile in (0..n).step_by(block_size) {
@@ -226,7 +225,6 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
             }
         }
     } else {
-        println!("Using Naive Implementation. This might take a while.");
         for col_block in (0..p).step_by(block_size) {
             for row in 0..m {
                 for tile in (0..n).step_by(block_size) {

@@ -1,4 +1,4 @@
-use crate::{sgemm, sgemm_tiled, sgemm_tiled_par, F32Tensor};
+use crate::{sgemm, sgemm_tiled, sgemm_tiled_par, sgemm_tiled_simd, F32Tensor};
 use float_cmp::approx_eq;
 
 /// These tests are for correctness coming from numpy.
@@ -140,6 +140,14 @@ fn sgemm_correctness_1() {
     c_actual.fill(0.0);
 
     sgemm_tiled_par(&a, false, &b, false, &mut c_actual);
+
+    for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
+        approx_eq!(f32, *actual, *expected);
+    }
+
+    c_actual.fill(0.0);
+
+    sgemm_tiled_simd(&a, false, &b, false, &mut c_actual);
 
     for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
         approx_eq!(f32, *actual, *expected);

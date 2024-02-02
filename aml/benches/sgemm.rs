@@ -71,6 +71,29 @@ pub fn sgemm_benches(cri: &mut Criterion) {
         })
     });
 
+    let mut a_data_simd: Vec<f32> = vec![0.0; 1024 * 256];
+    a_data_simd.iter_mut().for_each(|v| *v = rng.gen());
+    let a_simd = F32Tensor::new(&a_data_simd, vec![1024, 256]);
+
+    let mut b_data_simd: Vec<f32> = vec![0.0; 256 * 128];
+    b_data_simd.iter_mut().for_each(|v| *v = rng.gen());
+    let b_simd = F32Tensor::new(&b_data_simd, vec![256, 128]);
+
+    let mut c_simd: Vec<f32> = vec![0.0; 1024 * 128];
+
+    cri.bench_function("Medium Rectangular Matrices (Simd)", |bencher| {
+        bencher.iter(|| {
+            sgemm_tiled_par(
+                black_box(&a_simd),
+                black_box(false),
+                black_box(&b_simd),
+                black_box(false),
+                black_box(&mut c_simd),
+            )
+        })
+    });
+
+
     let mut a_data_par_lg: Vec<f32> = vec![0.0; 4096 * 1024];
     a_data_par_lg.iter_mut().for_each(|v| *v = rng.gen());
     let a_par_lg = F32Tensor::new(&a_data_par_lg, vec![4096, 1024]);
@@ -116,7 +139,7 @@ pub fn sgemm_benches(cri: &mut Criterion) {
     });
 }
 
-criterion_group!{
+criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10);
     targets = sgemm_benches

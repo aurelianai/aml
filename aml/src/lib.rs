@@ -114,8 +114,12 @@ pub fn sgemm_tiled(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut V
             for tile in (0..n).step_by(block_size) {
                 for tile_row in 0..block_size {
                     for el in 0..block_size {
-                        c[row * p + col_block + el] += a.data[row * n + tile + tile_row]
-                            * b.data[tile * p + tile_row * p + col_block + el];
+                        unsafe {
+                            *c.get_unchecked_mut(row * p + col_block + el) +=
+                                *a.data.get_unchecked(row * n + tile + tile_row)
+                                    * *b.data
+                                        .get_unchecked(tile * p + tile_row * p + col_block + el);
+                        }
                     }
                 }
             }
@@ -159,9 +163,11 @@ pub fn sgemm_tiled_par(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &m
                             unsafe {
                                 c_ptr.set(
                                     c_index,
-                                    a.data[row * n + tile + tile_row]
-                                        * b.data[tile * p + tile_row * p + col_block + el]
-                                        + c[c_index],
+                                    *a.data.get_unchecked(row * n + tile + tile_row)
+                                        * *b.data.get_unchecked(
+                                            tile * p + tile_row * p + col_block + el,
+                                        )
+                                        + *c.get_unchecked(c_index),
                                 );
                             }
                         }

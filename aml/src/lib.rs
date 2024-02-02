@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests;
 
+use rayon::prelude::*;
+
 pub struct F32Tensor<'a> {
     shape: Vec<usize>,
     data: &'a [f32],
@@ -28,6 +30,24 @@ impl<'a> F32Tensor<'a> {
         );
 
         Self { shape, data }
+    }
+}
+
+#[derive(Copy)]
+struct F32Buffer(*mut f32);
+
+unsafe impl Sync for F32Buffer {}
+unsafe impl Send for F32Buffer {}
+impl Clone for F32Buffer {
+    fn clone(&self) -> Self {
+        F32Buffer(self.0)
+    }
+}
+
+impl F32Buffer {
+    #[inline(always)]
+    unsafe fn set(self, i: usize, v: f32) {
+        *self.0.add(i) = v
     }
 }
 
@@ -94,4 +114,50 @@ pub fn sgemm_tiled(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut V
             }
         }
     }
+}
+
+pub fn sgemm_tiled_par(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut Vec<f32>) {
+    assert!(!a_t && !b_t, "Transposes are not supported yet");
+    assert!(
+        a.shape[1] == b.shape[0],
+        "Tensor A Shape {:#?} is not compatible with Tensor B Shape {:#?}",
+        a.shape,
+        b.shape
+    );
+    assert!(
+        a.shape[0] * b.shape[1] == c.len(),
+        "Output buffer `c` has size {}, but should have {} * {}",
+        c.len(),
+        a.shape[0],
+        b.shape[1]
+    );
+
+    let m = a.shape[0];
+    let n = a.shape[1];
+    let p = b.shape[1];
+
+    let block_size = 16;
+
+    let c_ptr = F32Buffer(c.as_mut_ptr());
+
+    (0..p)
+        .into_par_iter()
+        .step_by(block_size)
+        .for_each(|col_block| {
+            for row in 0..m {
+                for tile in (0..n).step_by(block_size) {
+                    for tile_row in 0..block_size {
+                        for el in 0..block_size {
+                            unsafe {
+                                c_ptr.set(
+                                    row * p + col_block + el,
+                                    a.data[row * n + tile + tile_row]
+                                        * b.data[tile * p + tile_row * p + col_block + el],
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
 }

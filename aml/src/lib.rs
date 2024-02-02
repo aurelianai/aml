@@ -114,7 +114,7 @@ pub fn sgemm_tiled(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut V
             for tile in (0..n).step_by(block_size) {
                 for tile_row in 0..block_size {
                     for el in 0..block_size {
-                        c[row * p + col_block + el] = a.data[row * n + tile + tile_row]
+                        c[row * p + col_block + el] += a.data[row * n + tile + tile_row]
                             * b.data[tile * p + tile_row * p + col_block + el];
                     }
                 }
@@ -155,11 +155,13 @@ pub fn sgemm_tiled_par(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &m
                 for tile in (0..n).step_by(block_size) {
                     for tile_row in 0..block_size {
                         for el in 0..block_size {
+                            let c_index = row * p + col_block + el;
                             unsafe {
                                 c_ptr.set(
-                                    row * p + col_block + el,
+                                    c_index,
                                     a.data[row * n + tile + tile_row]
-                                        * b.data[tile * p + tile_row * p + col_block + el],
+                                        * b.data[tile * p + tile_row * p + col_block + el]
+                                        + c[c_index],
                                 );
                             }
                         }
@@ -207,8 +209,14 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
 
                             let a_values = _mm256_broadcast_ss(&a.data[row * n + tile + tile_col]);
 
-                            let res_1 = _mm256_dp_ps(a_values, b_vector_1, 0);
-                            let res_2 = _mm256_dp_ps(a_values, b_vector_2, 0);
+                            let res_1 = _mm256_add_ps(
+                                _mm256_mul_ps(a_values, b_vector_1),
+                                _mm256_loadu_ps(c.as_ptr().add(row * p + col_block)),
+                            );
+                            let res_2 = _mm256_add_ps(
+                                _mm256_mul_ps(a_values, b_vector_2),
+                                _mm256_loadu_ps(c.as_ptr().add(row * p + col_block + 8)),
+                            );
 
                             _mm256_storeu_ps(c.as_mut_ptr().add(row * p + col_block), res_1);
                             _mm256_storeu_ps(c.as_mut_ptr().add(row * p + col_block + 8), res_2);

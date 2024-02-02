@@ -93,7 +93,6 @@ pub fn sgemm_benches(cri: &mut Criterion) {
         })
     });
 
-
     let mut a_data_par_lg: Vec<f32> = vec![0.0; 4096 * 1024];
     a_data_par_lg.iter_mut().for_each(|v| *v = rng.gen());
     let a_par_lg = F32Tensor::new(&a_data_par_lg, vec![4096, 1024]);

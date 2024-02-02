@@ -1,5 +1,4 @@
 use crate::{sgemm, sgemm_tiled, sgemm_tiled_par, sgemm_tiled_simd, F32Tensor};
-use float_cmp::approx_eq;
 
 /// These tests are for correctness coming from numpy.
 /// See `../benches` for performance tests.
@@ -93,8 +92,6 @@ fn sgemm_correctness_1() {
 
     let mut c_actual: Vec<f32> = vec![0.0; 16 * 16];
 
-    sgemm(&a, false, &b, false, &mut c_actual);
-
     let c_expected: Vec<f32> = vec![
         -12700.0, 19450.0, 5339.0, -39609.0, 23365.0, 867.0, 49771.0, -46474.0, -49346.0, 18562.0,
         11985.0, 2985.0, 5780.0, 22674.0, -366.0, -1041.0, 8300.0, 19990.0, 59280.0, 22709.0,
@@ -125,8 +122,10 @@ fn sgemm_correctness_1() {
         -27348.0, 1603.0, 9183.0, -34376.0, 13744.0, 29567.0, 3751.0,
     ];
 
+    sgemm(&a, false, &b, false, &mut c_actual);
+
     for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        approx_eq!(f32, *actual, *expected);
+        assert!(*actual == *expected);
     }
 
     c_actual.fill(0.0);
@@ -134,7 +133,7 @@ fn sgemm_correctness_1() {
     sgemm_tiled(&a, false, &b, false, &mut c_actual);
 
     for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        approx_eq!(f32, *actual, *expected);
+        assert!(*actual == *expected);
     }
 
     c_actual.fill(0.0);
@@ -142,7 +141,7 @@ fn sgemm_correctness_1() {
     sgemm_tiled_par(&a, false, &b, false, &mut c_actual);
 
     for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        approx_eq!(f32, *actual, *expected);
+        assert!(*actual == *expected);
     }
 
     c_actual.fill(0.0);
@@ -150,7 +149,7 @@ fn sgemm_correctness_1() {
     sgemm_tiled_simd(&a, false, &b, false, &mut c_actual);
 
     for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        approx_eq!(f32, *actual, *expected);
+        assert!(*actual == *expected);
     }
 }
 

@@ -1,5 +1,3 @@
-#![cfg_attr(feature = "stdsimd", feature(stdsimd))]
-
 #[cfg(test)]
 mod tests;
 
@@ -8,7 +6,7 @@ use core::arch::x86;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use rayon::prelude::*;
+use std::thread;
 
 pub struct F32Tensor<'a> {
     shape: Vec<usize>,
@@ -53,8 +51,9 @@ impl Clone for F32Buffer {
 
 impl F32Buffer {
     #[inline(always)]
+    /// This will += `v` at index `i` in the underlying buffer
     unsafe fn set(self, i: usize, v: f32) {
-        *self.0.add(i) = v
+        *self.0.add(i) += v
     }
 }
 
@@ -148,33 +147,43 @@ pub fn sgemm_tiled_par(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &m
     let p = b.shape[1];
 
     let block_size = 16;
-
     let c_ptr = F32Buffer(c.as_mut_ptr());
 
-    (0..p)
-        .into_par_iter()
-        .step_by(block_size)
-        .for_each(|col_block| {
-            for row in 0..m {
-                for tile in (0..n).step_by(block_size) {
-                    for tile_row in 0..block_size {
-                        for el in 0..block_size {
-                            let c_index = row * p + col_block + el;
-                            unsafe {
-                                c_ptr.set(
-                                    c_index,
-                                    *a.data.get_unchecked(row * n + tile + tile_row)
-                                        * *b.data.get_unchecked(
-                                            tile * p + tile_row * p + col_block + el,
-                                        )
-                                        + *c.get_unchecked(c_index),
-                                );
+    if p / 16 < 4 {
+        println!("Small Matrix, so it will not run in parallel");
+        sgemm_tiled(a, a_t, b, b_t, c);
+    } else {
+        let cols_per_thread = p / 4;
+
+        thread::scope(|s| {
+            for thread_col_start in (0..p).step_by(cols_per_thread) {
+                s.spawn(move || {
+                    for col_block in
+                        (thread_col_start..thread_col_start + cols_per_thread).step_by(16)
+                    {
+                        for row in 0..m {
+                            for tile in (0..n).step_by(block_size) {
+                                for tile_row in 0..block_size {
+                                    for el in 0..block_size {
+                                        let c_index = row * p + col_block + el;
+                                        unsafe {
+                                            c_ptr.set(
+                                                c_index,
+                                                *a.data.get_unchecked(row * n + tile + tile_row)
+                                                    * *b.data.get_unchecked(
+                                                        tile * p + tile_row * p + col_block + el,
+                                                    )
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                });
             }
         });
+    }
 }
 
 pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut Vec<f32>) {

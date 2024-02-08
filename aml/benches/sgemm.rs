@@ -1,6 +1,7 @@
 use aml::{sgemm, sgemm_tiled, sgemm_tiled_par, sgemm_tiled_simd, F32Tensor};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use rand::{thread_rng, Rng};
+use std::hint::black_box;
 
 pub fn sgemm_benches(cri: &mut Criterion) {
     let mut rng = thread_rng();
@@ -81,7 +82,6 @@ pub fn sgemm_benches(cri: &mut Criterion) {
                 })
             },
         );
-
         let mut c_simd: Vec<f32> = vec![0.0; a.shape[0] * b.shape[1]];
         cri.bench_function(
             &format!("{:?} x {:?} (Simd Serial)", a.shape, b.shape),

@@ -227,8 +227,31 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
     }
 }
 
+/*
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "avx")]
+unsafe fn sgemm_avx512(
+    a_ptr: *const f32,
+    b_ptr: *const f32,
+    c_ptr: *mut f32,
+    m: usize,
+    n: usize,
+    p: usize,
+    block_size: usize,
+) {
+    for col_block in (0..p).step_by(block_size) {
+        for row in 0..m {
+            for tile in (0..n).step_by(block_size) {
+                core::arch::asm!(
+
+                )
+            }
+        }
+    }
+}
+*/
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx", enable = "fma")]
 unsafe fn sgemm_avx(
     a_ptr: *const f32,
     b_ptr: *const f32,
@@ -254,8 +277,8 @@ unsafe fn sgemm_avx(
                     let b_1 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block));
                     let b_2 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block + 8));
 
-                    c_1 = _mm256_add_ps(c_1, _mm256_mul_ps(a_val, b_1));
-                    c_2 = _mm256_add_ps(c_2, _mm256_mul_ps(a_val, b_2));
+                    c_1 = _mm256_fmadd_ps(a_val, b_1, c_1);
+                    c_2 = _mm256_fmadd_ps(a_val, b_2, c_2);
 
                     a_1 = _mm_shuffle_ps(a_1, a_1, 0x39);
                     a_val = _mm256_broadcastss_ps(a_1);
@@ -266,8 +289,8 @@ unsafe fn sgemm_avx(
                     let b_1 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block));
                     let b_2 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block + 8));
 
-                    c_1 = _mm256_add_ps(c_1, _mm256_mul_ps(a_val, b_1));
-                    c_2 = _mm256_add_ps(c_2, _mm256_mul_ps(a_val, b_2));
+                    c_1 = _mm256_fmadd_ps(a_val, b_1, c_1);
+                    c_2 = _mm256_fmadd_ps(a_val, b_2, c_2);
 
                     a_2 = _mm_shuffle_ps(a_2, a_2, 0x39);
                     a_val = _mm256_broadcastss_ps(a_2);
@@ -278,8 +301,8 @@ unsafe fn sgemm_avx(
                     let b_1 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block));
                     let b_2 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block + 8));
 
-                    c_1 = _mm256_add_ps(c_1, _mm256_mul_ps(a_val, b_1));
-                    c_2 = _mm256_add_ps(c_2, _mm256_mul_ps(a_val, b_2));
+                    c_1 = _mm256_fmadd_ps(a_val, b_1, c_1);
+                    c_2 = _mm256_fmadd_ps(a_val, b_2, c_2);
 
                     a_3 = _mm_shuffle_ps(a_3, a_3, 0x39);
                     a_val = _mm256_broadcastss_ps(a_3);
@@ -290,8 +313,8 @@ unsafe fn sgemm_avx(
                     let b_1 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block));
                     let b_2 = _mm256_loadu_ps(b_ptr.add(tile * p + tile_col * p + col_block + 8));
 
-                    c_1 = _mm256_add_ps(c_1, _mm256_mul_ps(a_val, b_1));
-                    c_2 = _mm256_add_ps(c_2, _mm256_mul_ps(a_val, b_2));
+                    c_1 = _mm256_fmadd_ps(a_val, b_1, c_1);
+                    c_2 = _mm256_fmadd_ps(a_val, b_2, c_2);
 
                     a_4 = _mm_shuffle_ps(a_4, a_4, 0x39);
                     a_val = _mm256_broadcastss_ps(a_4);

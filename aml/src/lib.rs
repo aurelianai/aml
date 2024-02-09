@@ -213,17 +213,21 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        if std::is_x86_feature_detected!("avx") && std::is_x86_feature_detected!("fma") {
+        if std::is_x86_feature_detected!("avx512f") {
+            unsafe {
+                sgemm_avx512(a_ptr, b_ptr, c_ptr, m, n, p, block_size);
+            }
+        } else if std::is_x86_feature_detected!("avx") && std::is_x86_feature_detected!("fma") {
             unsafe {
                 sgemm_avx(a_ptr, b_ptr, c_ptr, m, n, p, block_size);
             }
         } else {
-            panic!("AVX is not enabled");
+            panic!("AVX not detected");
         }
     }
 }
 
-/*
+#[target_feature(enable = "avx")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn sgemm_avx512(
     a_ptr: *const f32,
@@ -237,14 +241,21 @@ unsafe fn sgemm_avx512(
     for col_block in (0..p).step_by(block_size) {
         for row in 0..m {
             for tile in (0..n).step_by(block_size) {
-                asm!(
-
-                )
+                asm!("vmovups zmm0, [{}]", in(reg) c_ptr.add(row * p + col_block));
+                for tile_col in 0..block_size {
+                    asm!(
+                        "vbroadcastss zmm1, [{0}]",
+                        "vmovups zmm2, [{1}]",
+                        "vfmadd231ps zmm0, zmm1, zmm2",
+                        in(reg) a_ptr.add(row * n + tile + tile_col),
+                        in(reg) b_ptr.add((tile + tile_col) * p + col_block),
+                    )
+                }
+                asm!("vmovups [{}], zmm0", in(reg) c_ptr.add(row * p + col_block));
             }
         }
     }
 }
-*/
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx", enable = "fma")]
@@ -260,54 +271,25 @@ unsafe fn sgemm_avx(
     for col_block in (0..p).step_by(block_size) {
         for row in 0..m {
             for tile in (0..n).step_by(block_size) {
-
-                // ymm0 + ymm1 = c
-                asm!("vmovups ymm0, [{}]", in(reg) c_ptr.add(row * p + col_block));
-                asm!("vmovups ymm1, [{}]", in(reg) c_ptr.add(row * p + col_block + 8));
-
-                // ymm4 = a_val
-                asm!("movups xmm5, [{}]", in(reg) a_ptr.add(row * n + tile));
-                asm!("movups xmm6, [{}]", in(reg) a_ptr.add(row * n + tile + 4));
-                asm!("movups xmm7, [{}]", in(reg) a_ptr.add(row * n + tile + 8));
-                asm!("movups xmm8, [{}]", in(reg) a_ptr.add(row * n + tile + 12));
-
-                // ymm2 + ymm3 = b
-                for tile_col in 0..4 {
-                    asm!("vbroadcastss ymm4, xmm5");
-                    asm!("vmovups ymm2, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block));
-                    asm!("vmovups ymm3, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block + 8));
-                    asm!("vfmadd231ps ymm0, ymm2, ymm4");
-                    asm!("vfmadd231ps ymm1, ymm3, ymm4");
-                    asm!("shufps xmm5, xmm5, 57");
+                asm!(
+                    "vmovups ymm0, [{0}]", 
+                    "vmovups ymm1, [{1}]",
+                    in(reg) c_ptr.add(row * p + col_block),
+                    in(reg) c_ptr.add(row * p + col_block + 8),
+                );
+                for tile_col in 0..block_size {
+                    asm!(
+                        "vbroadcastss ymm2, [{0}]",
+                        "vmovups ymm3, [{1}]",
+                        "vfmadd231ps ymm0, ymm3, ymm2",
+                        "vbroadcastss ymm2, [{0}]",
+                        "vmovups ymm3, [{2}]",
+                        "vfmadd231ps ymm1, ymm3, ymm5",
+                        in(reg) a_ptr.add(row * n + tile + tile_col),
+                        in(reg) b_ptr.add((tile + tile_col) * p + col_block),
+                        in(reg) b_ptr.add((tile + tile_col) * p + col_block + 8),
+                    );
                 }
-
-                for tile_col in 4..8 {
-                    asm!("vbroadcastss ymm4, xmm6");
-                    asm!("vmovups ymm2, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block));
-                    asm!("vmovups ymm3, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block + 8));
-                    asm!("vfmadd231ps ymm0, ymm2, ymm4");
-                    asm!("vfmadd231ps ymm1, ymm3, ymm4");
-                    asm!("shufps xmm6, xmm6, 57");
-                }
-
-                for tile_col in 8..12 {
-                    asm!("vbroadcastss ymm4, xmm7");
-                    asm!("vmovups ymm2, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block));
-                    asm!("vmovups ymm3, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block + 8));
-                    asm!("vfmadd231ps ymm0, ymm2, ymm4");
-                    asm!("vfmadd231ps ymm1, ymm3, ymm4");
-                    asm!("shufps xmm7, xmm7, 57");
-                }
-
-                for tile_col in 12..16 {
-                    asm!("vbroadcastss ymm8, xmm3");
-                    asm!("vmovups ymm2, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block));
-                    asm!("vmovups ymm3, [{}]", in(reg) b_ptr.add((tile + tile_col) * p + col_block + 8));
-                    asm!("vfmadd231ps ymm0, ymm2, ymm4");
-                    asm!("vfmadd231ps ymm1, ymm3, ymm4");
-                    asm!("shufps xmm8, xmm8, 57");
-                }
-
                 asm!(
                     "vmovups [{0}], ymm0",
                     "vmovups [{1}], ymm1",

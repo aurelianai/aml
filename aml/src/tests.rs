@@ -1,4 +1,4 @@
-use crate::{sgemm, sgemm_cm, sgemm_tiled, sgemm_tiled_par, sgemm_tiled_simd, F32Tensor};
+use crate::{sgemm, F32Tensor};
 
 /// These tests are for correctness coming from numpy.
 /// See `../benches` for performance tests.
@@ -46,7 +46,13 @@ fn sgemm_correctness_1() {
         -41.0, -96.0, -118.0, -107.0, 68.0, -1.0, 91.0, -73.0, 110.0, -64.0, 19.0, 78.0, -44.0,
         75.0, 48.0, -38.0, 9.0, 14.0, 72.0,
     ];
-    let a = F32Tensor::new(&a_data, vec![16, 32]);
+    let a = F32Tensor::new(vec![16, 32]);
+    for i in 0..16 * 32 {
+        unsafe {
+            *a.data.add(i) = a_data[i];
+        }
+    }
+    println!("Made it to 55");
 
     let b_data = vec![
         -119.0, 80.0, -107.0, -95.0, 29.0, -3.0, -85.0, -80.0, 0.0, -8.0, -85.0, 88.0, 52.0, -24.0,
@@ -88,17 +94,16 @@ fn sgemm_correctness_1() {
         6.0, 6.0, 10.0, -4.0, 48.0, 83.0, -75.0, 67.0, -5.0, -124.0, -36.0, 74.0, -38.0, 77.0,
         -55.0, -66.0, 72.0, -104.0, 81.0, -66.0, -47.0, -11.0, -53.0, -31.0,
     ];
-    let b = F32Tensor::new(&b_data, vec![32, 16]);
-
-    let mut b_data_cm: Vec<f32> = Vec::new();
-    for j in 0..b.shape[1] {
-        for i in 0..b.shape[0] {
-            b_data_cm.push(b.data[i * b.shape[1] + j]);
+    let b = F32Tensor::new(vec![32, 16]);
+    assert!(b_data.len() == 32 * 16);
+    for i in 0..32*16 {
+        unsafe {
+            *b.data.add(i) = b_data[i];
         }
     }
-    let b_cm = F32Tensor::new(&b_data_cm, vec![32, 16]);
+    println!("Made it to 103");
 
-    let mut c_actual: Vec<f32> = vec![0.0; 16 * 16];
+    let c_actual = F32Tensor::new(vec![16, 16]);
 
     let c_expected: Vec<f32> = vec![
         -12700.0, 19450.0, 5339.0, -39609.0, 23365.0, 867.0, 49771.0, -46474.0, -49346.0, 18562.0,
@@ -130,41 +135,10 @@ fn sgemm_correctness_1() {
         -27348.0, 1603.0, 9183.0, -34376.0, 13744.0, 29567.0, 3751.0,
     ];
 
-    sgemm(&a, false, &b, false, &mut c_actual);
+    sgemm(&a, &b, &c_actual);
 
-    for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        assert!(*actual == *expected);
-    }
-
-    c_actual.fill(0.0);
-
-    sgemm_tiled(&a, false, &b, false, &mut c_actual);
-
-    for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        assert!(*actual == *expected);
-    }
-
-    c_actual.fill(0.0);
-
-    sgemm_tiled_par(&a, false, &b, false, &mut c_actual);
-
-    for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        assert!(*actual == *expected);
-    }
-
-    c_actual.fill(0.0);
-
-    sgemm_tiled_simd(&a, false, &b, false, &mut c_actual);
-
-    for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        assert!(*actual == *expected);
-    }
-
-    c_actual.fill(0.0);
-
-    sgemm_cm(&a, &b_cm, &mut c_actual);
-
-    for (actual, expected) in c_actual.iter().zip(c_expected.iter()) {
-        assert!(*actual == *expected);
-    }
+    c_expected
+        .iter()
+        .enumerate()
+        .for_each(|(i, expected)| assert!(c_actual[i] == *expected));
 }

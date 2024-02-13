@@ -1,17 +1,17 @@
 #[cfg(test)]
 mod tests;
 
-use std::arch::asm;
-use std::{thread, thread::JoinHandle};
+use std::{alloc::Layout, arch::asm, thread, thread::JoinHandle};
 
-pub struct F32Tensor<'a> {
+pub struct F32Tensor {
     pub shape: Vec<usize>,
-    data: &'a [f32],
+    pub data: *mut f32,
+    layout: Layout,
 }
 
-impl<'a> F32Tensor<'a> {
+impl F32Tensor {
     /// Utility method eliminating footguns assoc. with creating tensors by hand
-    pub fn new(data: &'a [f32], shape: Vec<usize>) -> F32Tensor<'a> {
+    pub fn new(shape: Vec<usize>) -> F32Tensor {
         assert!(shape.len() == 2, "Only Shapes of length 2 are supported");
         assert!(
             shape[0] % 16 == 0,
@@ -23,192 +23,54 @@ impl<'a> F32Tensor<'a> {
             "Dim 1 {} must be divisible by 16",
             shape[1]
         );
-        assert!(
-            data.len() == shape.iter().fold(1, |acc, next| acc * next),
-            "Data of Length {} doesn't work for shape {:#?}",
-            data.len(),
-            shape
-        );
+        assert!(shape[0] * shape[1] > 0, "Must have more than 0 elements");
 
-        Self { shape, data }
+        // AVX512f requires 64 byte alignment
+        let layout = Layout::from_size_align(shape[0] * shape[1], 64).unwrap();
+
+        let data = unsafe { std::alloc::alloc(layout) as *mut f32 };
+
+        Self { shape, data, layout }
     }
 }
 
+impl std::ops::Index<usize> for F32Tensor {
+    type Output = f32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        unsafe { &*self.data.add(index) }
+    }
+}
+
+impl Drop for F32Tensor {
+    fn drop(&mut self) {
+        unsafe {
+            std::alloc::dealloc(self.data as *mut u8, self.layout);
+        }
+    }
+}
+
+/// Wrapper for *mut f32 that allows unsafe mutability from multiple threads.
 #[derive(Copy)]
-struct F32MutBuffer(*mut f32);
-
-unsafe impl Sync for F32MutBuffer {}
-unsafe impl Send for F32MutBuffer {}
-impl Clone for F32MutBuffer {
-    fn clone(&self) -> Self {
-        F32MutBuffer(self.0)
-    }
-}
-
-impl F32MutBuffer {
-    #[inline(always)]
-    /// This will += `v` at index `i` in the underlying buffer
-    unsafe fn set(self, i: usize, v: f32) {
-        *self.0.add(i) += v
-    }
-
-    #[inline(always)]
-    unsafe fn add(self, i: usize) -> *mut f32 {
-        self.0.add(i)
-    }
-}
-
-#[derive(Copy)]
-struct F32Buffer(*const f32);
-
-unsafe impl Sync for F32Buffer {}
+struct F32Buffer(*mut f32);
 unsafe impl Send for F32Buffer {}
+unsafe impl Sync for F32Buffer {}
 impl Clone for F32Buffer {
-    fn clone(&self) -> Self {
+    fn clone(self: &Self) -> F32Buffer {
         F32Buffer(self.0)
     }
 }
 
 impl F32Buffer {
-    #[inline(always)]
-    unsafe fn add(self, i: usize) -> *const f32 {
-        self.0.add(i)
-    }
-}
-
-
-pub fn sgemm(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut Vec<f32>) {
-    assert!(!a_t && !b_t, "Transposes are not supported yet");
-    assert!(
-        a.shape[1] == b.shape[0],
-        "Tensor A Shape {:#?} is not compatible with Tensor B Shape {:#?}",
-        a.shape,
-        b.shape
-    );
-    assert!(
-        a.shape[0] * b.shape[1] == c.len(),
-        "Output buffer `c` has size {}, but should have {} * {}",
-        c.len(),
-        a.shape[0],
-        b.shape[1]
-    );
-
-    let m = a.shape[0];
-    let n = a.shape[1];
-    let p = b.shape[1];
-
-    for i in 0..m {
-        for j in 0..p {
-            for k in 0..n {
-                c[i * p + j] += a.data[i * n + k] * b.data[k * p + j];
-            }
+    fn add(self: &Self, i: usize) -> *mut f32 {
+        unsafe {
+            self.0.offset(i as isize)
         }
-    }
-}
-
-pub fn sgemm_tiled(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut Vec<f32>) {
-    assert!(!a_t && !b_t, "Transposes are not supported yet");
-    assert!(
-        a.shape[1] == b.shape[0],
-        "Tensor A Shape {:#?} is not compatible with Tensor B Shape {:#?}",
-        a.shape,
-        b.shape
-    );
-    assert!(
-        a.shape[0] * b.shape[1] == c.len(),
-        "Output buffer `c` has size {}, but should have {} * {}",
-        c.len(),
-        a.shape[0],
-        b.shape[1]
-    );
-
-    let m = a.shape[0];
-    let n = a.shape[1];
-    let p = b.shape[1];
-
-    let block_size = 16;
-
-    for col_block in (0..p).step_by(block_size) {
-        for row in 0..m {
-            for tile in (0..n).step_by(block_size) {
-                for tile_row in 0..block_size {
-                    for el in 0..block_size {
-                        unsafe {
-                            *c.get_unchecked_mut(row * p + col_block + el) +=
-                                *a.data.get_unchecked(row * n + tile + tile_row)
-                                    * *b.data
-                                        .get_unchecked(tile * p + tile_row * p + col_block + el);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-pub fn sgemm_tiled_par(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut Vec<f32>) {
-    assert!(!a_t && !b_t, "Transposes are not supported yet");
-    assert!(
-        a.shape[1] == b.shape[0],
-        "Tensor A Shape {:#?} is not compatible with Tensor B Shape {:#?}",
-        a.shape,
-        b.shape
-    );
-    assert!(
-        a.shape[0] * b.shape[1] == c.len(),
-        "Output buffer `c` has size {}, but should have {} * {}",
-        c.len(),
-        a.shape[0],
-        b.shape[1]
-    );
-
-    let m = a.shape[0];
-    let n = a.shape[1];
-    let p = b.shape[1];
-
-    let block_size = 16;
-    let c_ptr = F32MutBuffer(c.as_mut_ptr());
-
-    if p / 16 < 4 {
-        println!("Small Matrix, so it will not run in parallel");
-        sgemm_tiled(a, a_t, b, b_t, c);
-    } else {
-        let cols_per_thread = p / 4;
-
-        thread::scope(|s| {
-            for thread_col_start in (0..p).step_by(cols_per_thread) {
-                s.spawn(move || {
-                    for col_block in
-                        (thread_col_start..thread_col_start + cols_per_thread).step_by(16)
-                    {
-                        for row in 0..m {
-                            for tile in (0..n).step_by(block_size) {
-                                for tile_row in 0..block_size {
-                                    for el in 0..block_size {
-                                        let c_index = row * p + col_block + el;
-                                        unsafe {
-                                            c_ptr.set(
-                                                c_index,
-                                                *a.data.get_unchecked(row * n + tile + tile_row)
-                                                    * *b.data.get_unchecked(
-                                                        tile * p + tile_row * p + col_block + el,
-                                                    ),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        });
     }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &mut Vec<f32>) {
-    assert!(!a_t && !b_t, "Transposes are not supported yet");
+pub fn sgemm(a: &F32Tensor, b: &F32Tensor, c: &F32Tensor) {
     assert!(
         a.shape[1] == b.shape[0],
         "Tensor A Shape {:#?} is not compatible with Tensor B Shape {:#?}",
@@ -216,41 +78,37 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
         b.shape
     );
     assert!(
-        a.shape[0] * b.shape[1] == c.len(),
-        "Output buffer `c` has size {}, but should have {} * {}",
-        c.len(),
+        a.shape[0] == c.shape[0] && b.shape[1] == c.shape[1],
+        "Output tensor `c` has shape {:?}, but should have shape {}, {}",
+        c.shape,
         a.shape[0],
         b.shape[1]
     );
 
     let m = a.shape[0];
     let n = a.shape[1];
-    let p = b.shape[1];
+    let k = b.shape[1];
 
     let block_size = 16;
-
-    let a_ptr = a.data.as_ptr();
-    let b_ptr = b.data.as_ptr();
-    let c_ptr = c.as_mut_ptr();
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if std::is_x86_feature_detected!("avx512f") {
-            if p / block_size >= 8 {
+            if k / block_size >= 8 {
                 unsafe {
-                    sgemm_avx512_parallel(a_ptr, b_ptr, c_ptr, m, n, p, block_size);
+                    sgemm_avx512_parallel(a.data, b.data, c.data, m, n, k, block_size);
                 }
             } else {
                 unsafe {
-                    sgemm_avx512_serial(a_ptr, b_ptr, c_ptr, m, n, p, block_size);
+                    sgemm_avx512_serial(a.data, b.data, c.data, m, n, k, block_size);
                 }
             }
         } else if std::is_x86_feature_detected!("avx") && std::is_x86_feature_detected!("fma") {
             unsafe {
-                sgemm_avx(a_ptr, b_ptr, c_ptr, m, n, p, block_size);
+                sgemm_avx(a.data, b.data, c.data, m, n, k, block_size);
             }
         } else {
-            panic!("AVX not detected");
+            panic!("Please run on a machine with AVX or AVX512f support");
         }
     }
 }
@@ -258,21 +116,20 @@ pub fn sgemm_tiled_simd(a: &F32Tensor, a_t: bool, b: &F32Tensor, b_t: bool, c: &
 /// Parallelized SIMD SGEMM with AVX512f
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn sgemm_avx512_parallel(
-    a_ptr: *const f32,
-    b_ptr: *const f32,
-    c_ptr: *mut f32,
+    a: *mut f32,
+    b: *mut f32,
+    c: *mut f32,
     m: usize,
     n: usize,
-    p: usize,
+    k: usize,
     block_size: usize,
 ) {
-    let cols_per_thread = p / 8;
+    let cols_per_thread = k / 8;
+    let a = F32Buffer(a);
+    let b = F32Buffer(b);
+    let c = F32Buffer(c);
 
-    let a_buf = F32Buffer(a_ptr);
-    let b_buf = F32Buffer(b_ptr);
-    let c_buf = F32MutBuffer(c_ptr);
-
-    (0..p)
+    (0..k)
         .into_iter()
         .step_by(cols_per_thread)
         .map(|t_col_start| {
@@ -281,17 +138,17 @@ unsafe fn sgemm_avx512_parallel(
                 for col_block in (t_col_start..t_col_end).step_by(block_size) {
                     for row in 0..m {
                         for tile in (0..n).step_by(block_size) {
-                            asm!("vmovups zmm0, [{}]", in(reg) c_buf.add(row * p + col_block));
+                            asm!("vmovups zmm0, [{}]", in(reg) c.add(row * k + col_block));
                             for tile_col in 0..block_size {
                                 asm!(
                                     "vbroadcastss zmm1, [{0}]",
                                     "vmovups zmm2, [{1}]",
                                     "vfmadd231ps zmm0, zmm1, zmm2",
-                                    in(reg) a_buf.add(row * n + tile + tile_col),
-                                    in(reg) b_buf.add((tile + tile_col) * p + col_block),
-                                )
+                                    in(reg) a.add(row * n + tile + tile_col),
+                                    in(reg) b.add((tile + tile_col) * k + col_block),
+                                );
                             }
-                            asm!("vmovups [{}], zmm0", in(reg) c_buf.add(row * p + col_block));
+                            asm!("vmovups [{}], zmm0", in(reg) c.add(row * k + col_block));
                         }
                     }
                 }
@@ -306,28 +163,28 @@ unsafe fn sgemm_avx512_parallel(
 #[inline(always)]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn sgemm_avx512_serial(
-    a_ptr: *const f32,
-    b_ptr: *const f32,
-    c_ptr: *mut f32,
+    a: *mut f32,
+    b: *mut f32,
+    c: *mut f32,
     m: usize,
     n: usize,
-    p: usize,
+    k: usize,
     block_size: usize,
 ) {
-    for col_block in (0..p).step_by(block_size) {
+    for col_block in (0..k).step_by(block_size) {
         for row in 0..m {
             for tile in (0..n).step_by(block_size) {
-                asm!("vmovups zmm0, [{}]", in(reg) c_ptr.add(row * p + col_block));
+                asm!("vmovups zmm0, [{}]", in(reg) c.add(row * k + col_block));
                 for tile_col in 0..block_size {
                     asm!(
                         "vbroadcastss zmm1, [{0}]",
                         "vmovups zmm2, [{1}]",
                         "vfmadd231ps zmm0, zmm1, zmm2",
-                        in(reg) a_ptr.add(row * n + tile + tile_col),
-                        in(reg) b_ptr.add((tile + tile_col) * p + col_block),
+                        in(reg) a.add(row * n + tile + tile_col),
+                        in(reg) b.add((tile + tile_col) * k + col_block),
                     )
                 }
-                asm!("vmovups [{}], zmm0", in(reg) c_ptr.add(row * p + col_block));
+                asm!("vmovups [{}], zmm0", in(reg) c.add(row * k + col_block));
             }
         }
     }
@@ -337,22 +194,22 @@ unsafe fn sgemm_avx512_serial(
 #[inline(always)]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn sgemm_avx(
-    a_ptr: *const f32,
-    b_ptr: *const f32,
-    c_ptr: *mut f32,
+    a: *mut f32,
+    b: *mut f32,
+    c: *mut f32,
     m: usize,
     n: usize,
-    p: usize,
+    k: usize,
     block_size: usize,
 ) {
-    for col_block in (0..p).step_by(block_size) {
+    for col_block in (0..k).step_by(block_size) {
         for row in 0..m {
             for tile in (0..n).step_by(block_size) {
                 asm!(
                     "vmovups ymm0, [{0}]",
                     "vmovups ymm1, [{1}]",
-                    in(reg) c_ptr.add(row * p + col_block),
-                    in(reg) c_ptr.add(row * p + col_block + 8),
+                    in(reg) c.add(row * k + col_block),
+                    in(reg) c.add(row * k + col_block + 8),
                 );
                 for tile_col in 0..block_size {
                     asm!(
@@ -362,47 +219,17 @@ unsafe fn sgemm_avx(
                         "vbroadcastss ymm2, [{0}]",
                         "vmovups ymm3, [{2}]",
                         "vfmadd231ps ymm1, ymm3, ymm5",
-                        in(reg) a_ptr.add(row * n + tile + tile_col),
-                        in(reg) b_ptr.add((tile + tile_col) * p + col_block),
-                        in(reg) b_ptr.add((tile + tile_col) * p + col_block + 8),
+                        in(reg) a.add(row * n + tile + tile_col),
+                        in(reg) b.add((tile + tile_col) * k + col_block),
+                        in(reg) b.add((tile + tile_col) * k + col_block + 8),
                     );
                 }
                 asm!(
                     "vmovups [{0}], ymm0",
                     "vmovups [{1}], ymm1",
-                    in(reg) c_ptr.add(row * p + col_block),
-                    in(reg) c_ptr.add(row * p + col_block + 8),
+                    in(reg) c.add(row * k + col_block),
+                    in(reg) c.add(row * k + col_block + 8),
                 );
-            }
-        }
-    }
-}
-
-// Column Major Functions
-
-pub fn sgemm_cm(a: &F32Tensor, b: &F32Tensor, c: &mut Vec<f32>) {
-    assert!(
-        a.shape[1] == b.shape[0],
-        "Tensor A Shape {:#?} is not compatible with Tensor B Shape {:#?}",
-        a.shape,
-        b.shape
-    );
-    assert!(
-        a.shape[0] * b.shape[1] == c.len(),
-        "Output buffer `c` has size {}, but should have {} * {}",
-        c.len(),
-        a.shape[0],
-        b.shape[1]
-    );
-
-    let m = a.shape[0];
-    let n = a.shape[1];
-    let p = b.shape[1];
-
-    for i in 0..m {
-        for j in 0..p {
-            for k in 0..n {
-                c[i * p + j] += a.data[i * n + k] * b.data[j * n + k];
             }
         }
     }
